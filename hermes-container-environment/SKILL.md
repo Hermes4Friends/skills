@@ -30,24 +30,22 @@ The container filesystem is deliberately partitioned — some paths are read-onl
 
 ```
 /                          Read-only rootfs (security hardening)
-├── /opt/data/             HERMES_HOME — writable Docker volume [survives restart]
-│   ├── .hermes/           Agent state directory (writable)
-│   │   ├── config.yaml    ❌ RO (bind-mounted from host, secrets)
-│   │   ├── .env           ❌ RO (bind-mounted from host, API keys)
-│   │   ├── skills/        ✅ RW (Docker volume — skill updates, taps, hub state)
-│   │   ├── sessions/      ✅ RW (Docker volume — conversation state)
-│   │   ├── state.db       ✅ RW (session database)
-│   │   ├── memories/      ✅ RW (persistent memory)
-│   │   └── logs/          ✅ RW (agent + gateway logs)
-│   └── workspace/         ✅ RW (Docker volume — project files)
+├── ~/.hermes/              HERMES_HOME — writable Docker volume (agent owns this)
+│   ├── config.yaml         ✅ RW (agent writes its own config — model, toolsets, skills)
+│   ├── .env                ✅ RW (agent manages env vars — API keys injected at launch)
+│   ├── skills/             ✅ RW (Docker volume — skill updates, taps, hub state)
+│   ├── sessions/           ✅ RW (Docker volume — conversation state)
+│   ├── state.db            ✅ RW (session database)
+│   ├── memories/           ✅ RW (persistent memory)
+│   └── logs/               ✅ RW (agent + gateway logs)
 │
-├── /home/hermes/          ✅ RW (bind-mounted → Storage Box SMB share)
-│   ├── projects/          User project files (shared with other friends)
-│   ├── data/              User data (shared with other friends)
-│   └── *.md               User documents
+├── /home/hermes/           ✅ RW (bind-mounted → Storage Box SMB share)
+│   ├── projects/           User project files (shared with other friends)
+│   ├── data/               User data (shared with other friends)
+│   └── *.md                User documents
 │
-├── /tmp/                  tmpfs — LOST ON RESTART
-└── /var/                  Read-only rootfs
+├── /tmp/                   tmpfs — LOST ON RESTART
+└── /var/                   Read-only rootfs
 ```
 
 ### What You DO Have
@@ -66,22 +64,25 @@ Git:                 git               (clone, commit, push)
 
 | Path | Writable | Backed By | Survives |
 |---|---|---|---|
-| `/opt/data/.hermes/` | ✅ Yes | Docker volume | Container restart |
-| `config.yaml` / `.env` | ❌ No (file mounts) | Host filesystem | N/A (read-only) |
-| `/opt/data/skills/` | ✅ Yes | Docker volume | Container restart |
-| `/opt/data/sessions/` | ✅ Yes | Docker volume | Container restart |
+| `~/.hermes/` (HERMES_HOME) | ✅ Yes | Docker volume | Container restart |
+| `~/.hermes/config.yaml` | ✅ Yes | Docker volume (writable) | Container restart |
+| `~/.hermes/.env` | ✅ Yes | Docker volume (writable) | Container restart |
+| `~/.hermes/skills/` | ✅ Yes | Docker volume | Container restart |
+| `~/.hermes/sessions/` | ✅ Yes | Docker volume | Container restart |
 | `/home/hermes/` | ✅ Yes | Storage Box SMB | Everything — even host rebuild |
 | `/tmp/` | ✅ Yes | tmpfs | ❌ Gone on restart |
 | `/` (rootfs) | ❌ No | Image layer | ❌ (immutable) |
 
-### Storage Box Details
+### Why the Agent Owns Its Config
 
-`/home/hermes/` is mounted from a Hetzner Storage Box via SMB/CIFS. This means:
+`config.yaml` and `.env` are **writable**. The agent self-manages:
 
-- **Shared across friend containers** — `/home/alice/` and `/home/bob/` are on the same Storage Box
-- **Max 5 concurrent SMB connections** — cache aggressively, don't poll
-- **Slower than local NVMe** — use `~/.hermes/` (local volume) for sessions, state, logs. Use `/home/hermes/` for user files, projects, data.
-- **Survives everything** — host rebuild, container recreate, volume prune. Storage Box is the durable layer.
+- Changes its own model/provider without redeploy
+- Configures gateway platforms (Telegram, Discord)
+- Enables/disables toolsets and skills
+- Saves preferences that persist across restarts
+
+API keys are injected as **environment variables** at container launch (from the host), not baked into static `.env` files. The agent can read them but the source of truth lives at the container level — the host supplies keys, the agent uses them to configure itself.
 
 ## First Thing: Set Your Docker Host
 

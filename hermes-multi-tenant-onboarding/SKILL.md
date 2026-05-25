@@ -91,17 +91,17 @@ services:
     container_name: hermes-<friend>
     user: "2001:2001"
     environment:
+      - HERMES_HOME=/home/hermes/.hermes
       - DOCKER_HOST=tcp://dind:2375
-      - HERMES_PROFILE=friend-<friend>
+      # API keys injected as env vars (agent writes its own .env + config.yaml)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     volumes:
       - ./hermes-home:/home/hermes
-      - ./hermes-config:/home/hermes/.hermes
       - ./keys:/home/hermes/.hermes/keys:ro
-    networks:
-      - hermes-net
-    restart: unless-stopped
+      - hermes-<friend>-sessions:/home/hermes/.hermes/sessions
+      - hermes-<friend>-skills:/home/hermes/.hermes/skills
+      - hermes-<friend>-state:/home/hermes/.hermes
     depends_on:
       gluetun:
         condition: service_healthy
@@ -118,33 +118,9 @@ volumes:
 
 Replace `<friend>` with the friend's name throughout.
 
-### Step 4: Configure Hermes
+### Step 4: Launch (Agent Self-Configures)
 
-Create `/opt/hermes-<friend>/hermes-config/config.yaml`:
-
-```yaml
-# Minimal friend config
-model:
-  default: deepseek/deepseek-chat
-  provider: deepseek
-
-agent:
-  max_turns: 60
-
-gateway:
-  platform: telegram
-
-# Trust tier determines toolsets
-toolsets:
-  - web
-  - terminal
-  - file
-  - skills
-```
-
-For `basic` tier: strip `terminal` and `file`. They can still use dind but their Hermes agent won't directly touch the filesystem.
-
-### Step 5: Launch
+The agent starts with API keys injected as environment variables. On first boot, it writes its own `~/.hermes/config.yaml` and `~/.hermes/.env`. No pre-baked config files needed — the agent manages itself.
 
 ```bash
 cd /opt/hermes-<friend>
@@ -154,6 +130,18 @@ docker compose -p hermes-<friend> up -d
 docker ps --filter name=hermes-<friend>
 docker logs hermes-<friend>
 ```
+
+### Step 5: Pre-Seed Skills Volume
+
+Before first launch, clone the platform skills into the skills volume so the agent knows its environment:
+
+```bash
+git clone https://github.com/Hermes4Friends/skills.git /tmp/h4f-skills
+cp -r /tmp/h4f-skills/hermes-* /var/lib/docker/volumes/hermes-<friend>_hermes-<friend>-skills/_data/
+rm -rf /tmp/h4f-skills
+```
+
+Without this, the agent's first turn will diagnose the hardened container as "broken" because it doesn't know about dind.
 
 ### Step 6: Send Welcome Message
 
