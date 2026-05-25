@@ -24,16 +24,64 @@ You run inside a **hardened Hermes container** with deliberate restrictions. Eve
 | `systemctl` / `service` | No init system. | Run daemons in their own dind containers. |
 | Local `dockerd` | No Docker socket in this container. | **dind-executor on the Docker network.** |
 
-## What You DO Have
+## Directory Architecture
+
+The container filesystem is deliberately partitioned — some paths are read-only for security, others are writable and survive restarts.
+
+```
+/                          Read-only rootfs (security hardening)
+├── /opt/data/             HERMES_HOME — writable Docker volume [survives restart]
+│   ├── .hermes/           Agent state directory (writable)
+│   │   ├── config.yaml    ❌ RO (bind-mounted from host, secrets)
+│   │   ├── .env           ❌ RO (bind-mounted from host, API keys)
+│   │   ├── skills/        ✅ RW (Docker volume — skill updates, taps, hub state)
+│   │   ├── sessions/      ✅ RW (Docker volume — conversation state)
+│   │   ├── state.db       ✅ RW (session database)
+│   │   ├── memories/      ✅ RW (persistent memory)
+│   │   └── logs/          ✅ RW (agent + gateway logs)
+│   └── workspace/         ✅ RW (Docker volume — project files)
+│
+├── /home/hermes/          ✅ RW (bind-mounted → Storage Box SMB share)
+│   ├── projects/          User project files (shared with other friends)
+│   ├── data/              User data (shared with other friends)
+│   └── *.md               User documents
+│
+├── /tmp/                  tmpfs — LOST ON RESTART
+└── /var/                  Read-only rootfs
+```
+
+### What You DO Have
 
 ```
 Docker-in-Docker:    tcp://dind:2375   (on hermes-net)
-Persistent home:     /home/hermes/     (bind-mounted, survives restarts)
+Persistent home:     /home/hermes/     (Storage Box SMB — shared, survives everything)
+Agent state:         ~/.hermes/        (local Docker volume — survives container restart)
 Cloudflare tunnels:  cloudflared       (pre-installed or installable)
 Network:             hermes-net        (shared with dind, gluetun VPN)
 Python:              python3 + pip     (userspace tooling)
 Git:                 git               (clone, commit, push)
 ```
+
+### Read-Only vs Read-Write
+
+| Path | Writable | Backed By | Survives |
+|---|---|---|---|
+| `/opt/data/.hermes/` | ✅ Yes | Docker volume | Container restart |
+| `config.yaml` / `.env` | ❌ No (file mounts) | Host filesystem | N/A (read-only) |
+| `/opt/data/skills/` | ✅ Yes | Docker volume | Container restart |
+| `/opt/data/sessions/` | ✅ Yes | Docker volume | Container restart |
+| `/home/hermes/` | ✅ Yes | Storage Box SMB | Everything — even host rebuild |
+| `/tmp/` | ✅ Yes | tmpfs | ❌ Gone on restart |
+| `/` (rootfs) | ❌ No | Image layer | ❌ (immutable) |
+
+### Storage Box Details
+
+`/home/hermes/` is mounted from a Hetzner Storage Box via SMB/CIFS. This means:
+
+- **Shared across friend containers** — `/home/alice/` and `/home/bob/` are on the same Storage Box
+- **Max 5 concurrent SMB connections** — cache aggressively, don't poll
+- **Slower than local NVMe** — use `~/.hermes/` (local volume) for sessions, state, logs. Use `/home/hermes/` for user files, projects, data.
+- **Survives everything** — host rebuild, container recreate, volume prune. Storage Box is the durable layer.
 
 ## First Thing: Set Your Docker Host
 
